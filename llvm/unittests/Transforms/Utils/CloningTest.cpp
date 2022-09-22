@@ -25,6 +25,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
 
@@ -1086,5 +1087,49 @@ TEST_F(CloneModule, Comdat) {
 
   Function *NewF = NewM->getFunction("f");
   EXPECT_EQ(CD, NewF->getComdat());
+}
+
+static void optimizeModule(llvm::Module &M) {
+  llvm::LoopAnalysisManager LAM;
+  llvm::FunctionAnalysisManager FAM;
+  llvm::CGSCCAnalysisManager CGAM;
+  llvm::ModuleAnalysisManager MAM;
+  llvm::PassBuilder PB;
+  llvm::ModulePassManager MPM;
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+  MPM = PB.buildPerModuleDefaultPipeline(OptimizationLevel::O2);
+  MPM.run(M, MAM);
+}
+
+TEST(CloneModule2, CloneCrash) {
+  StringRef ImplAssembly = R"(
+@loop.targets = constant [2 x i8*] [i8* blockaddress(@loop, %bb0), i8* blockaddress(@loop, %bb1)]
+@loop.target = constant i8* blockaddress(@loop, %bb1)
+
+define void @loop(i64* %p) {
+entry:
+  br label %bb0
+bb0:
+  %target = load i8*, i8** @loop.target, align 8
+  indirectbr i8* %target, [label %bb0, label %bb1]
+bb1:
+  ret void
+}
+    )";
+  LLVMContext Context;
+  SMDiagnostic Error;
+  auto ImplModule = parseAssemblyString(ImplAssembly, Error, Context);
+  EXPECT_TRUE(ImplModule != nullptr);
+  EXPECT_FALSE(verifyModule(*ImplModule));
+  llvm::ValueToValueMapTy vmap;
+  auto NewModule = llvm::CloneModule(*ImplModule, vmap);
+  EXPECT_FALSE(llvm::verifyModule(*NewModule, &llvm::errs()));
+  NewModule->print(llvm::errs(), nullptr);
+  optimizeModule(*NewModule);
+  NewModule->print(llvm::errs(), nullptr);
 }
 }

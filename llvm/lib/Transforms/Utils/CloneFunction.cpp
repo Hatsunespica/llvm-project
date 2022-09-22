@@ -41,8 +41,10 @@ using namespace llvm;
 BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB, ValueToValueMapTy &VMap,
                                   const Twine &NameSuffix, Function *F,
                                   ClonedCodeInfo *CodeInfo,
-                                  DebugInfoFinder *DIFinder) {
-  BasicBlock *NewBB = BasicBlock::Create(BB->getContext(), "", F);
+                                  DebugInfoFinder *DIFinder,
+                                  BasicBlock *NewBB) {
+  if (NewBB == nullptr)
+    NewBB = BasicBlock::Create(BB->getContext(), "", F);
   if (BB->hasName())
     NewBB->setName(BB->getName() + NameSuffix);
 
@@ -88,7 +90,8 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
                              SmallVectorImpl<ReturnInst *> &Returns,
                              const char *NameSuffix, ClonedCodeInfo *CodeInfo,
                              ValueMapTypeRemapper *TypeMapper,
-                             ValueMaterializer *Materializer) {
+                             ValueMaterializer *Materializer,
+                             bool shouldCreateBB) {
   assert(NameSuffix && "NameSuffix cannot be null!");
 
 #ifndef NDEBUG
@@ -169,11 +172,19 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
   // Loop over all of the basic blocks in the function, cloning them as
   // appropriate.  Note that we save BE this way in order to handle cloning of
   // recursive functions into themselves.
+  auto NewBBIt = NewFunc->begin();
   for (const BasicBlock &BB : *OldFunc) {
 
+    BasicBlock *CBB = nullptr;
     // Create a new basic block and copy instructions into it!
-    BasicBlock *CBB = CloneBasicBlock(&BB, VMap, NameSuffix, NewFunc, CodeInfo,
-                                      DIFinder ? &*DIFinder : nullptr);
+    if (shouldCreateBB) {
+      CBB = CloneBasicBlock(&BB, VMap, NameSuffix, NewFunc, CodeInfo,
+                            DIFinder ? &*DIFinder : nullptr);
+    } else {
+      CBB = CloneBasicBlock(&BB, VMap, NameSuffix, NewFunc, CodeInfo,
+                            DIFinder ? &*DIFinder : nullptr, &*NewBBIt);
+      ++NewBBIt;
+    }
 
     // Add basic block mapping.
     VMap[&BB] = CBB;

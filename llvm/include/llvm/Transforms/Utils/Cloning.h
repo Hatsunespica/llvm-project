@@ -116,10 +116,14 @@ struct ClonedCodeInfo {
 /// If you would like to collect additional information about the cloned
 /// function, you can specify a ClonedCodeInfo object with the optional fifth
 /// parameter.
+///
+/// If NewBB is not empty, all instructions will be inserted into newBB in
+/// the case of creating a basic block first and cloning it later.
 BasicBlock *CloneBasicBlock(const BasicBlock *BB, ValueToValueMapTy &VMap,
                             const Twine &NameSuffix = "", Function *F = nullptr,
                             ClonedCodeInfo *CodeInfo = nullptr,
-                            DebugInfoFinder *DIFinder = nullptr);
+                            DebugInfoFinder *DIFinder = nullptr,
+                            BasicBlock *NewBB = nullptr);
 
 /// Return a copy of the specified function and add it to that
 /// function's module.  Also, any references specified in the VMap are changed
@@ -172,7 +176,8 @@ void CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
                        const char *NameSuffix = "",
                        ClonedCodeInfo *CodeInfo = nullptr,
                        ValueMapTypeRemapper *TypeMapper = nullptr,
-                       ValueMaterializer *Materializer = nullptr);
+                       ValueMaterializer *Materializer = nullptr,
+                       bool shouldCreateBB = true);
 
 void CloneAndPruneIntoFromInst(Function *NewFunc, const Function *OldFunc,
                                const Instruction *StartingInst,

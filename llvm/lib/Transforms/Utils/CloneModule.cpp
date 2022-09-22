@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -77,6 +78,21 @@ std::unique_ptr<Module> llvm::CloneModule(
                          I.getAddressSpace(), I.getName(), New.get());
     NF->copyAttributesFrom(&I);
     VMap[&I] = NF;
+
+    // We should create basic blocks in the function in case we have to
+    // clone them because BlockAddress might reference to them.
+    if (!I.isDeclaration() && ShouldCloneDefinition(&I)) {
+      for (const BasicBlock &BB : I) {
+        BasicBlock *CBB = BasicBlock::Create(BB.getContext(), "", NF);
+
+        VMap[&BB] = CBB;
+        if (BB.hasAddressTaken()) {
+          Constant *OldBBAddr = BlockAddress::get(
+              const_cast<Function *>(&I), const_cast<BasicBlock *>(&BB));
+          VMap[OldBBAddr] = BlockAddress::get(NF, CBB);
+        }
+      }
+    }
   }
 
   // Loop over the aliases in the module
@@ -166,7 +182,7 @@ std::unique_ptr<Module> llvm::CloneModule(
 
     SmallVector<ReturnInst *, 8> Returns; // Ignore returns cloned.
     CloneFunctionInto(F, &I, VMap, CloneFunctionChangeType::ClonedModule,
-                      Returns);
+                      Returns, "", nullptr, nullptr, nullptr, false);
 
     if (I.hasPersonalityFn())
       F->setPersonalityFn(MapValue(I.getPersonalityFn(), VMap));
