@@ -86,6 +86,20 @@ public:
   bool hasConflict()const{
     return !(knownOnes&knownZeros).isZero();
   }
+
+  /*
+   * Return 1 if i-th bit is 1, 0 if it is 0. -1 for unknown
+   */
+  int getIthBit(size_t i)const{
+    assert(i<getBitWidth() && "required position out of range");
+    bool zero=knownZeros.isOneBitSet(i), one=knownOnes.isOneBitSet(i);
+    if( zero && one){
+      return 1;
+    }else if(zero | one){
+      return 0;
+    }
+    return -1;
+  }
 };
 
 struct ConstantKnownBitsPattern
@@ -157,9 +171,6 @@ struct OrKnownBitsPattern
   LogicalResult matchAndRewrite(arith::OrIOp OrOp,
                                 PatternRewriter &rewriter) const override {
     auto ctx = OrOp.getContext();
-    
-    if (OrOp.getType() != IntegerType::get(ctx, 32))
-        return success();
 
     auto analysisLhs = getAnalysis(OrOp.getLhs()).getValue();
     auto analysisRhs = getAnalysis(OrOp.getRhs()).getValue();
@@ -174,6 +185,7 @@ struct OrKnownBitsPattern
 
     KnownBits result(zeros,ones);
     assert(!result.hasConflict() && "result should not contain conflict");
+    assert(verifyResult(lBits,rBits,result) && "result verification failed");
 
     auto analysisAttr = StringAttr::get(ctx, result.toString());
 
@@ -184,6 +196,160 @@ struct OrKnownBitsPattern
     OrOp->setAttr(ANALYSIS_ATTR_NAME, analysisAttr);
     rewriter.finalizeRootUpdate(OrOp);
     return success();
+  }
+
+  static bool verifyResult(KnownBits lBits, KnownBits rBits, KnownBits result){
+    /*
+     * True value table for OR
+     *     0  1  X
+     *  0  0  1  X
+     *  1  1  1  1
+     *  X  X  1  X
+     */
+    for(size_t i=0;i<lBits.getBitWidth();++i){
+        int L=lBits.getIthBit(i),R=rBits.getIthBit(i),res=result.getIthBit(i);
+        if(L==1||R==1){
+            if(res!=1){
+              return false;
+            }
+        }else if(L==0&&R==0){
+            if(res!=0){
+              return false;
+            }
+        }else{
+            if(res!=-1){
+              return false;
+            }
+        }
+    }
+    return true;
+  }
+};
+
+struct AndKnownBitsPattern
+    : public OpRewritePattern<arith::AndIOp> {
+  using OpRewritePattern<arith::AndIOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::AndIOp AndOp,
+                                PatternRewriter &rewriter) const override {
+    auto ctx = AndOp.getContext();
+
+    auto analysisLhs = getAnalysis(AndOp.getLhs()).getValue();
+    auto analysisRhs = getAnalysis(AndOp.getRhs()).getValue();
+
+    KnownBits lBits=KnownBits::fromString(analysisLhs.str());
+    KnownBits rBits=KnownBits::fromString(analysisRhs.str());
+    assert(!lBits.hasConflict() &&"lhs contains conflict");
+    assert(!rBits.hasConflict() && "rhs contains conflict");
+    APInt ones, zeros;
+    ones=lBits.getKnownOnes() & rBits.getKnownOnes();
+    zeros=lBits.getKnownZeros() | rBits.getKnownZeros();
+
+    KnownBits result(zeros,ones);
+    assert(!result.hasConflict() && "result should not contain conflict");
+    assert(verifyResult(lBits,rBits,result) && "result verification failed");
+
+    auto analysisAttr = StringAttr::get(ctx, result.toString());
+
+    if (AndOp->getAttr(ANALYSIS_ATTR_NAME) == analysisAttr)
+        return success();
+
+    rewriter.startRootUpdate(AndOp);
+    AndOp->setAttr(ANALYSIS_ATTR_NAME, analysisAttr);
+    rewriter.finalizeRootUpdate(AndOp);
+    return success();
+  }
+
+  static bool verifyResult(KnownBits lBits, KnownBits rBits, KnownBits result){
+    /*
+     * True value table for AND
+     *     0  1  X
+     *  0  0  0  0
+     *  1  0  1  X
+     *  X  0  X  X
+     */
+    for(size_t i=0;i<lBits.getBitWidth();++i){
+        int L=lBits.getIthBit(i),R=rBits.getIthBit(i),res=result.getIthBit(i);
+        if(L==0||R==0){
+            if(res!=0){
+              return false;
+            }
+        }else if(L==1&&R==1){
+            if(res!=1){
+              return false;
+            }
+        }else{
+            if(res!=-1){
+              return false;
+            }
+        }
+    }
+    return true;
+  }
+};
+
+struct XOrKnownBitsPattern
+    : public OpRewritePattern<arith::XOrIOp> {
+  using OpRewritePattern<arith::XOrIOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::XOrIOp XOrOp,
+                                PatternRewriter &rewriter) const override {
+    auto ctx = XOrOp.getContext();
+
+    auto analysisLhs = getAnalysis(XOrOp.getLhs()).getValue();
+    auto analysisRhs = getAnalysis(XOrOp.getRhs()).getValue();
+
+    KnownBits lBits=KnownBits::fromString(analysisLhs.str());
+    KnownBits rBits=KnownBits::fromString(analysisRhs.str());
+    assert(!lBits.hasConflict() &&"lhs contains conflict");
+    assert(!rBits.hasConflict() && "rhs contains conflict");
+    APInt ones, zeros;
+    ones = (lBits.getKnownZeros() & rBits.getKnownOnes()) |
+           (lBits.getKnownOnes() & rBits.getKnownZeros());
+    zeros = (lBits.getKnownZeros() & rBits.getKnownZeros()) |
+            (lBits.getKnownOnes() & rBits.getKnownOnes());
+
+
+    KnownBits result(zeros,ones);
+    assert(!result.hasConflict() && "result should not contain conflict");
+    assert(verifyResult(lBits,rBits,result) && "result verification failed");
+
+    auto analysisAttr = StringAttr::get(ctx, result.toString());
+
+    if (XOrOp->getAttr(ANALYSIS_ATTR_NAME) == analysisAttr)
+        return success();
+
+    rewriter.startRootUpdate(XOrOp);
+    XOrOp->setAttr(ANALYSIS_ATTR_NAME, analysisAttr);
+    rewriter.finalizeRootUpdate(XOrOp);
+    return success();
+  }
+
+  static bool verifyResult(KnownBits lBits, KnownBits rBits, KnownBits result){
+    /*
+     * True value table for XOR
+     *     0  1  X
+     *  0  0  1  X
+     *  1  1  0  X
+     *  X  X  X  X
+     */
+    for(size_t i=0;i<lBits.getBitWidth();++i){
+        int L=lBits.getIthBit(i),R=rBits.getIthBit(i),res=result.getIthBit(i);
+        if(L==-1||R==-1){
+            if(res!=-1){
+              return false;
+            }
+        }else if(L==R){
+            if(res!=0){
+              return false;
+            }
+        }else{
+            if(res!=1){
+              return false;
+            }
+        }
+    }
+    return true;
   }
 };
 } // namespace
@@ -201,7 +367,8 @@ void KnownBitsAnalysisPass::runOnOperation() {
     auto *parentOp = getOperation();
     MLIRContext *ctx = parentOp->getContext();
     RewritePatternSet patterns(ctx);
-    patterns.add<ConstantKnownBitsPattern, OrKnownBitsPattern>(ctx);
+    patterns.add<ConstantKnownBitsPattern, OrKnownBitsPattern,
+                 AndKnownBitsPattern,XOrKnownBitsPattern>(ctx);
     (void)applyPatternsAndFoldGreedily(parentOp, std::move(patterns));
 
 }
