@@ -384,7 +384,7 @@ struct ExtSIKnownBitsPattern
     }
     newOnes=newOnes.concat(ones);
 
-    KnownBits result(newOnes,newZeros);
+    KnownBits result(newZeros,newOnes);
     assert(!result.hasConflict() && "result should not contain conflict");
     assert(verifyResult(inBits, result) && "result verification failed");
 
@@ -440,7 +440,7 @@ struct ExtUIKnownBitsPattern
     newOnes.flipAllBits();
     newOnes=newOnes.concat(ones);
 
-    KnownBits result(newOnes,newZeros);
+    KnownBits result(newZeros,newOnes);
     assert(!result.hasConflict() && "result should not contain conflict");
     assert(verifyResult(inBits, result) && "result verification failed");
 
@@ -468,6 +468,59 @@ struct ExtUIKnownBitsPattern
     return true;
   }
 };
+
+struct TruncIKnownBitsPattern
+    : public OpRewritePattern<arith::TruncIOp> {
+  using OpRewritePattern<arith::TruncIOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::TruncIOp TruncIOp,
+                                PatternRewriter &rewriter) const override {
+    auto ctx = TruncIOp.getContext();
+
+
+    auto analysisIn = getAnalysis(TruncIOp.getIn()).getValue();
+    IntegerType newIntType=llvm::dyn_cast<IntegerType>(TruncIOp.getOut().getType());
+
+
+    KnownBits inBits=KnownBits::fromString(analysisIn.str());
+
+    assert(!inBits.hasConflict() &&"lhs contains conflict");
+    APInt zeros=inBits.getKnownZeros(),ones=inBits.getKnownOnes();
+    //get highest bits
+
+    APInt newZeros=zeros.trunc(newIntType.getWidth()),
+          newOnes=ones.trunc(newIntType.getWidth());
+
+    KnownBits result(newZeros,newOnes);
+    assert(!result.hasConflict() && "result should not contain conflict");
+    assert(verifyResult(inBits, result) && "result verification failed");
+
+    auto analysisAttr = StringAttr::get(ctx, result.toString());
+
+    if (TruncIOp->getAttr(ANALYSIS_ATTR_NAME) == analysisAttr)
+      return success();
+
+    rewriter.startRootUpdate(TruncIOp);
+    TruncIOp->setAttr(ANALYSIS_ATTR_NAME, analysisAttr);
+    rewriter.finalizeRootUpdate(TruncIOp);
+    return success();
+  }
+
+  static bool verifyResult(KnownBits inBits, KnownBits result){
+    /*
+     * Verify very bits in the result;
+     */
+    for(size_t i=0;i<result.getBitWidth();++i){
+      if(result.getKnownZeros().isOneBitSet(i)!=inBits.getKnownZeros().isOneBitSet(i)){
+            return false;
+      }
+      if(result.getKnownOnes().isOneBitSet(i)!=inBits.getKnownOnes().isOneBitSet(i)){
+            return false;
+      }
+    }
+    return true;
+  }
+};
 } // namespace
 
 
@@ -485,7 +538,7 @@ void KnownBitsAnalysisPass::runOnOperation() {
     RewritePatternSet patterns(ctx);
     patterns.add<ConstantKnownBitsPattern, OrKnownBitsPattern,
                  AndKnownBitsPattern,XOrKnownBitsPattern,ExtSIKnownBitsPattern,
-                 ExtUIKnownBitsPattern>(ctx);
+                 ExtUIKnownBitsPattern,TruncIKnownBitsPattern>(ctx);
     (void)applyPatternsAndFoldGreedily(parentOp, std::move(patterns));
 
 }
