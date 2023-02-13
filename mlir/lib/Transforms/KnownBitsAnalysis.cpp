@@ -18,6 +18,17 @@ namespace mlir {
 #include "mlir/Transforms/Passes.h.inc"
 } // namespace mlir
 
+/*
+ * Known bits analysis
+ * Supported operations:
+ *   + And
+ *   + Or
+ *   + Xor
+ *   + Extsi
+ *   + Extui
+ *   + Trunc
+ */
+
 using namespace mlir;
 
 namespace {
