@@ -352,6 +352,122 @@ struct XOrKnownBitsPattern
     return true;
   }
 };
+
+struct ExtSIKnownBitsPattern
+    : public OpRewritePattern<arith::ExtSIOp> {
+  using OpRewritePattern<arith::ExtSIOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::ExtSIOp ExtSIOp,
+                                PatternRewriter &rewriter) const override {
+    auto ctx = ExtSIOp.getContext();
+
+
+    auto analysisIn = getAnalysis(ExtSIOp.getIn()).getValue();
+    IntegerType newIntType=llvm::dyn_cast<IntegerType>(ExtSIOp.getOut().getType());
+
+
+    KnownBits inBits=KnownBits::fromString(analysisIn.str());
+
+    assert(!inBits.hasConflict() &&"lhs contains conflict");
+    APInt zeros=inBits.getKnownZeros(),ones=inBits.getKnownOnes();
+    //get highest bits
+
+    APInt newZeros=APInt::getZero(newIntType.getWidth()-zeros.getBitWidth());
+    APInt newOnes=newZeros;
+    if(zeros.isNegative()){
+        newZeros.flipAllBits();
+    }
+    newZeros=newZeros.concat(zeros);
+
+    if(ones.isNegative()){
+        newOnes.flipAllBits();
+    }
+    newOnes=newOnes.concat(ones);
+
+    KnownBits result(newOnes,newZeros);
+    assert(!result.hasConflict() && "result should not contain conflict");
+    assert(verifyResult(inBits, result) && "result verification failed");
+
+    auto analysisAttr = StringAttr::get(ctx, result.toString());
+
+    if (ExtSIOp->getAttr(ANALYSIS_ATTR_NAME) == analysisAttr)
+        return success();
+
+    rewriter.startRootUpdate(ExtSIOp);
+    ExtSIOp->setAttr(ANALYSIS_ATTR_NAME, analysisAttr);
+    rewriter.finalizeRootUpdate(ExtSIOp);
+    return success();
+  }
+
+  static bool verifyResult(KnownBits inBits, KnownBits result){
+    /*
+     * Verify sign bits in the result
+     */
+    bool inZero=inBits.getKnownZeros().isNegative();
+    bool inOne=inBits.getKnownOnes().isNegative();
+    for(size_t i=inBits.getBitWidth();i<result.getBitWidth();++i){
+      if(result.getKnownOnes().isOneBitSet(i)!=inOne ||
+            result.getKnownZeros().isOneBitSet(i)!=inZero){
+            return false;
+      }
+    }
+    return true;
+  }
+};
+
+struct ExtUIKnownBitsPattern
+    : public OpRewritePattern<arith::ExtUIOp> {
+  using OpRewritePattern<arith::ExtUIOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::ExtUIOp ExtUIOp,
+                                PatternRewriter &rewriter) const override {
+    auto ctx = ExtUIOp.getContext();
+
+
+    auto analysisIn = getAnalysis(ExtUIOp.getIn()).getValue();
+    IntegerType newIntType=llvm::dyn_cast<IntegerType>(ExtUIOp.getOut().getType());
+
+
+    KnownBits inBits=KnownBits::fromString(analysisIn.str());
+
+    assert(!inBits.hasConflict() &&"lhs contains conflict");
+    APInt zeros=inBits.getKnownZeros(),ones=inBits.getKnownOnes();
+    //get highest bits
+
+    APInt newZeros=APInt::getAllOnes(newIntType.getWidth()-zeros.getBitWidth());
+    APInt newOnes=newZeros;
+    newZeros=newZeros.concat(zeros);
+    newOnes.flipAllBits();
+    newOnes=newOnes.concat(ones);
+
+    KnownBits result(newOnes,newZeros);
+    assert(!result.hasConflict() && "result should not contain conflict");
+    assert(verifyResult(inBits, result) && "result verification failed");
+
+    auto analysisAttr = StringAttr::get(ctx, result.toString());
+
+    if (ExtUIOp->getAttr(ANALYSIS_ATTR_NAME) == analysisAttr)
+      return success();
+
+    rewriter.startRootUpdate(ExtUIOp);
+    ExtUIOp->setAttr(ANALYSIS_ATTR_NAME, analysisAttr);
+    rewriter.finalizeRootUpdate(ExtUIOp);
+    return success();
+  }
+
+  static bool verifyResult(KnownBits inBits, KnownBits result){
+    /*
+     * Verify sign bits in the result
+     */
+    for(size_t i=inBits.getBitWidth();i<result.getBitWidth();++i){
+      if(!result.getKnownOnes().isOneBitSet(i) &&
+          result.getKnownZeros().isOneBitSet(i)){
+            return false;
+      }
+    }
+    return true;
+  }
+};
 } // namespace
 
 
@@ -368,7 +484,8 @@ void KnownBitsAnalysisPass::runOnOperation() {
     MLIRContext *ctx = parentOp->getContext();
     RewritePatternSet patterns(ctx);
     patterns.add<ConstantKnownBitsPattern, OrKnownBitsPattern,
-                 AndKnownBitsPattern,XOrKnownBitsPattern>(ctx);
+                 AndKnownBitsPattern,XOrKnownBitsPattern,ExtSIKnownBitsPattern,
+                 ExtUIKnownBitsPattern>(ctx);
     (void)applyPatternsAndFoldGreedily(parentOp, std::move(patterns));
 
 }
