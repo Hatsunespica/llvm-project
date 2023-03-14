@@ -560,7 +560,7 @@ struct AddIKnownBitsPattern : public OpRewritePattern<arith::AddIOp> {
 
     auto analysisAttr = StringAttr::get(ctx, result.toString());
 
-    if (OrOp->getAttr(ANALYSIS_ATTR_NAME) == analysisAttr)
+    if (AddIOp->getAttr(ANALYSIS_ATTR_NAME) == analysisAttr)
       return success();
 
     rewriter.startRootUpdate(AddIOp);
