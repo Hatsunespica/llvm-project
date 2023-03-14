@@ -33,21 +33,6 @@ using namespace mlir;
 
 namespace {
 
-llvm::SmallVector<std::string> split(std::string s, std::string delimiter) {
-  size_t pos_start = 0, pos_end, delim_len = delimiter.length();
-  std::string token;
-  llvm::SmallVector<std::string> res;
-
-  while ((pos_end = s.find(delimiter, pos_start)) != std::string::npos) {
-    token = s.substr(pos_start, pos_end - pos_start);
-    pos_start = pos_end + delim_len;
-    res.push_back(token);
-  }
-
-  res.push_back(s.substr(pos_start));
-  return res;
-}
-
 class KnownBits {
   llvm::APInt knownZeros, knownOnes;
 
@@ -60,6 +45,7 @@ public:
   KnownBits(APInt concreteVal) {
     knownOnes = concreteVal;
     knownZeros = ~knownOnes;
+    assert(knownOnes.getBitWidth()==knownZeros.getBitWidth() && "ones and zeros should have the same bitwidth");
   }
   KnownBits(APInt zeros, APInt ones) : knownZeros(zeros), knownOnes(ones) {
     assert(zeros.getBitWidth() == ones.getBitWidth() &&
@@ -73,19 +59,31 @@ public:
   llvm::APInt getKnownOnes() const { return knownOnes; }
 
   std::string toString() const {
-    llvm::SmallString<64> ones, zeros;
-    knownZeros.toString(zeros, 2, false);
-    knownOnes.toString(ones, 2, false);
-    return std::to_string(getBitWidth()) + "|" + zeros.str().str() + "|" +
-           ones.str().str();
+    std::string str;
+    str.resize(getBitWidth());
+    for(size_t i=0;i<str.size();++i){
+      APInt tmp=APInt::getOneBitSet(getBitWidth(),i);
+      if(!knownZeros.intersects(tmp)&&!knownOnes.intersects(tmp)){
+        str[i]='X';
+      }else{
+        str[i]=(knownZeros.intersects(tmp)?'0':'1');
+      }
+    }
+    reverse(str.begin(),str.end());
+    return str;
   }
 
   static KnownBits fromString(std::string &&str) {
-    llvm::SmallVector<std::string> vec = split(str, "|");
-    assert(vec.size() == 3 &&
-           "expecting parsed string contains two delimiters");
-    size_t width = (size_t)stoi(vec[0]);
-    return KnownBits(APInt(width, vec[1], 2), APInt(width, vec[2], 2));
+    reverse(str.begin(),str.end());
+    APInt knownZeros(str.size(),0),knownOnes(str.size(),0);
+    for(size_t i=0;i<str.size();++i) {
+      if(str[i]=='0') {
+        knownZeros.setBit(i);
+      }else if(str[i]=='1') {
+        knownOnes.setBit(i);
+      }
+    }
+    return KnownBits(knownZeros,knownOnes);
   }
 
   bool hasConflict() const { return !(knownOnes & knownZeros).isZero(); }
@@ -96,9 +94,9 @@ public:
   int getIthBit(size_t i) const {
     assert(i < getBitWidth() && "required position out of range");
     bool zero = knownZeros.isOneBitSet(i), one = knownOnes.isOneBitSet(i);
-    if (zero && one) {
+    if (one) {
       return 1;
-    } else if (zero | one) {
+    } else if (zero) {
       return 0;
     }
     return -1;
@@ -123,7 +121,6 @@ struct ConstantKnownBitsPattern : public OpRewritePattern<arith::ConstantOp> {
 
     IntegerType type = llvm::dyn_cast<IntegerType>(value.getType());
     APInt intVal = value.getValue();
-
     KnownBits bits(intVal);
     auto analysisAttr = StringAttr::get(ctx, bits.toString());
 
