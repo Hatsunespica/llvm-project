@@ -45,7 +45,8 @@ public:
   KnownBits(APInt concreteVal) {
     knownOnes = concreteVal;
     knownZeros = ~knownOnes;
-    assert(knownOnes.getBitWidth()==knownZeros.getBitWidth() && "ones and zeros should have the same bitwidth");
+    assert(knownOnes.getBitWidth() == knownZeros.getBitWidth() &&
+           "ones and zeros should have the same bitwidth");
   }
   KnownBits(APInt zeros, APInt ones) : knownZeros(zeros), knownOnes(ones) {
     assert(zeros.getBitWidth() == ones.getBitWidth() &&
@@ -58,32 +59,36 @@ public:
 
   llvm::APInt getKnownOnes() const { return knownOnes; }
 
+  llvm::APInt getMaxValue() const { return ~knownZeros; }
+
+  llvm::APInt getMinValue() const { return knownOnes; }
+
   std::string toString() const {
     std::string str;
     str.resize(getBitWidth());
-    for(size_t i=0;i<str.size();++i){
-      APInt tmp=APInt::getOneBitSet(getBitWidth(),i);
-      if(!knownZeros.intersects(tmp)&&!knownOnes.intersects(tmp)){
-        str[i]='X';
-      }else{
-        str[i]=(knownZeros.intersects(tmp)?'0':'1');
+    for (size_t i = 0; i < str.size(); ++i) {
+      APInt tmp = APInt::getOneBitSet(getBitWidth(), i);
+      if (!knownZeros.intersects(tmp) && !knownOnes.intersects(tmp)) {
+        str[i] = 'X';
+      } else {
+        str[i] = (knownZeros.intersects(tmp) ? '0' : '1');
       }
     }
-    reverse(str.begin(),str.end());
+    reverse(str.begin(), str.end());
     return str;
   }
 
   static KnownBits fromString(std::string &&str) {
-    reverse(str.begin(),str.end());
-    APInt knownZeros(str.size(),0),knownOnes(str.size(),0);
-    for(size_t i=0;i<str.size();++i) {
-      if(str[i]=='0') {
+    reverse(str.begin(), str.end());
+    APInt knownZeros(str.size(), 0), knownOnes(str.size(), 0);
+    for (size_t i = 0; i < str.size(); ++i) {
+      if (str[i] == '0') {
         knownZeros.setBit(i);
-      }else if(str[i]=='1') {
+      } else if (str[i] == '1') {
         knownOnes.setBit(i);
       }
     }
-    return KnownBits(knownZeros,knownOnes);
+    return KnownBits(knownZeros, knownOnes);
   }
 
   bool hasConflict() const { return !(knownOnes & knownZeros).isZero(); }
@@ -515,6 +520,56 @@ struct TruncIKnownBitsPattern : public OpRewritePattern<arith::TruncIOp> {
         return false;
       }
     }
+    return true;
+  }
+};
+
+struct AddIKnownBitsPattern : public OpRewritePattern<arith::AddIOp> {
+  using OpRewritePattern<arith::AddIOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::AddIOp AddIOp,
+                                PatternRewriter &rewriter) const override {
+    auto ctx = AddIOp.getContext();
+
+    auto analysisLhs = getAnalysis(AddIOp.getLhs()).getValue();
+    auto analysisRhs = getAnalysis(AddIOp.getRhs()).getValue();
+
+    KnownBits lBits = KnownBits::fromString(analysisLhs.str());
+    KnownBits rBits = KnownBits::fromString(analysisRhs.str());
+    assert(!lBits.hasConflict() && "lhs contains conflict");
+    assert(!rBits.hasConflict() && "rhs contains conflict");
+    APInt ones, zeros;
+
+    APInt possibleSumZero = lBits.getMaxValue() + rBits.getMaxValue();
+    APInt possibleSumOne = lBits.getMinValue() + rBits.getMinValue();
+
+    APInt carryKnownZero =
+        ~(possibleSumZero ^ lBits.getKnownZeros() ^ rBits.getKnownZeros());
+    APInt carryKnownOne =
+        possibleSumOne ^ lBits.getKnownOnes() ^ rBits.getKnownOnes();
+
+    APInt LHSKnownUnion = lBits.getKnownOnes() | lBits.getKnownZeros();
+    APInt RHSKnownUnion = rBits.getKnownZeros() | rBits.getKnownOnes();
+
+    APInt carryKnownUnion = carryKnownOne | carryKnownZero;
+    APInt known = carryKnownUnion & LHSKnownUnion & RHSKnownUnion;
+
+    KnownBits result(~possibleSumZero & known, possibleSumOne & known);
+    assert(!result.hasConflict() && "result should not contain conflict");
+    assert(verifyResult(lBits, rBits, result) && "result verification failed");
+
+    auto analysisAttr = StringAttr::get(ctx, result.toString());
+
+    if (OrOp->getAttr(ANALYSIS_ATTR_NAME) == analysisAttr)
+      return success();
+
+    rewriter.startRootUpdate(AddIOp);
+    AddIOp->setAttr(ANALYSIS_ATTR_NAME, analysisAttr);
+    rewriter.finalizeRootUpdate(AddIOp);
+    return success();
+  }
+
+  static bool verifyResult(KnownBits lBits, KnownBits rBits, KnownBits result) {
     return true;
   }
 };
